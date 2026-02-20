@@ -73,6 +73,7 @@ func GetPaginatedResults(ctx context.Context, pCtx *backend.PluginContext, query
 	}
 	if query.PageMode != models.PaginationModeCursor {
 		bestEffort := query.PageBestEffort && (query.PageMode == models.PaginationModePage || query.PageMode == models.PaginationModeOffset)
+		checkHasNext := strings.TrimSpace(query.PageParamHasNextPath) != ""
 		for _, currentQuery := range queries {
 			frame, _, err := GetFrameForURLSourcesWithPostProcessing(ctx, pCtx, currentQuery, infClient, requestHeaders, false)
 			if err != nil && bestEffort && len(frames) > 0 {
@@ -80,6 +81,9 @@ func GetPaginatedResults(ctx context.Context, pCtx *backend.PluginContext, query
 			}
 			frames = append(frames, frame)
 			errs = errors.Join(errs, err)
+			if checkHasNext && !hasNextPage(frame, query) {
+				break
+			}
 		}
 	}
 	if query.PageMode == models.PaginationModeCursor {
@@ -144,6 +148,33 @@ func ApplyPaginationItemToQuery(query models.Query, fieldType models.PaginationP
 		query.URLOptions.Params = append(query.URLOptions.Params, field)
 	}
 	return query
+}
+
+// hasNextPage checks whether the API response indicates more pages are available.
+// It extracts the value at the configured path from the response stored in the
+// frame's metadata. Returns false if the value is null, absent, or extraction fails.
+func hasNextPage(frame *data.Frame, query models.Query) bool {
+	meta, ok := frame.Meta.Custom.(*CustomMeta)
+	if !ok || meta.Data == nil {
+		return false
+	}
+	body, err := json.Marshal(meta.Data)
+	if err != nil {
+		return false
+	}
+	framerType := jsonframer.FramerTypeGJSON
+	// GJSON returns "" for absent paths and "null" for null values.
+	// JQ returns "[]" for absent paths and "[null]" for null values.
+	emptyIndicators := map[string]bool{"": true, "null": true}
+	if query.Parser == models.InfinityParserJQBackend {
+		framerType = jsonframer.FramerTypeJQ
+		emptyIndicators = map[string]bool{"[]": true, "[null]": true}
+	}
+	val, err := jsonframer.GetRootData(string(body), query.PageParamHasNextPath, framerType)
+	if err != nil {
+		return false
+	}
+	return !emptyIndicators[val]
 }
 
 func GetFrameForURLSourcesWithPostProcessing(ctx context.Context, pCtx *backend.PluginContext, query models.Query, infClient Client, requestHeaders map[string]string, postProcessingRequired bool) (*data.Frame, string, error) {

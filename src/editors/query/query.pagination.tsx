@@ -150,6 +150,16 @@ export const PaginationEditor = (props: PaginationEditorProps) => {
                   </Stack>
                 </EditorField>
               )}
+              {(query.pagination_mode === 'page' || query.pagination_mode === 'offset') && (
+                <EditorField label="Next page path" tooltip="Optional selector to extract a next-page indicator from the response. When configured, pagination stops when the extracted value is null or absent.">
+                  <Input
+                    width={30}
+                    value={query.pagination_param_has_next_path || ''}
+                    onChange={(e) => onChange({ ...query, pagination_param_has_next_path: e.currentTarget.value })}
+                    placeholder="pagination.next"
+                  />
+                </EditorField>
+              )}
               {query.pagination_mode === 'cursor' && (
                 <EditorField label="Cursor field">
                   <Stack>

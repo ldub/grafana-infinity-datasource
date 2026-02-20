@@ -123,6 +123,7 @@ type Query struct {
 	PageMode                           PaginationMode         `json:"pagination_mode,omitempty"`
 	PageMaxPages                       int                    `json:"pagination_max_pages,omitempty"`
 	PageBestEffort                     bool                   `json:"pagination_best_effort,omitempty"`
+	PageParamHasNextPath               string                 `json:"pagination_param_has_next_path,omitempty"`
 	PageParamSizeFieldName             string                 `json:"pagination_param_size_field_name,omitempty"`
 	PageParamSizeFieldType             PaginationParamType    `json:"pagination_param_size_field_type,omitempty"`
 	PageParamSizeFieldVal              int                    `json:"pagination_param_size_value,omitempty"`

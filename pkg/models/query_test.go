@@ -190,6 +190,48 @@ func TestLoadQuery_PaginationBestEffort(t *testing.T) {
 	}
 }
 
+func TestLoadQuery_PaginationHasNextPath(t *testing.T) {
+	tests := []struct {
+		name      string
+		queryJSON string
+		want      string
+	}{
+		{
+			name: "should parse pagination_param_has_next_path",
+			queryJSON: `{
+				"type": "json",
+				"source": "url",
+				"parser": "backend",
+				"url": "https://example.com/api",
+				"pagination_mode": "page",
+				"pagination_max_pages": 3,
+				"pagination_param_has_next_path": "pagination.next"
+			}`,
+			want: "pagination.next",
+		},
+		{
+			name: "should default pagination_param_has_next_path to empty when omitted",
+			queryJSON: `{
+				"type": "json",
+				"source": "url",
+				"parser": "backend",
+				"url": "https://example.com/api",
+				"pagination_mode": "page",
+				"pagination_max_pages": 3
+			}`,
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := &backend.DataQuery{JSON: []byte(tt.queryJSON)}
+			got, err := models.LoadQuery(context.Background(), *q, backend.PluginContext{}, models.InfinitySettings{})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.PageParamHasNextPath)
+		})
+	}
+}
+
 func TestGetPaginationMaxPagesValue(t *testing.T) {
 	tests := []struct {
 		name    string

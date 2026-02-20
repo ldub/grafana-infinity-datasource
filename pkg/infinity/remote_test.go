@@ -51,6 +51,32 @@ func newMockClient(t *testing.T, bodies []string, succeedFor int32) (Client, *mo
 	return *client, mock
 }
 
+// sequenceMocker is an http.RoundTripper that returns a different body
+// for each successive request, cycling through the provided bodies slice.
+type sequenceMocker struct {
+	bodies []string
+	calls  atomic.Int32
+}
+
+func (m *sequenceMocker) RoundTrip(_ *http.Request) (*http.Response, error) {
+	n := int(m.calls.Add(1)) - 1
+	body := m.bodies[n%len(m.bodies)]
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Body:       io.NopCloser(bytes.NewBufferString(body)),
+	}, nil
+}
+
+func newSequenceClient(t *testing.T, bodies []string) Client {
+	t.Helper()
+	client, err := NewClient(context.TODO(), models.InfinitySettings{})
+	require.NoError(t, err)
+	client.HttpClient.Transport = &sequenceMocker{bodies: bodies}
+	client.IsMock = true
+	return *client
+}
+
 func TestGetPaginatedResults_BestEffort(t *testing.T) {
 	jsonBody := `[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]`
 	pCtx := &backend.PluginContext{}
@@ -200,6 +226,173 @@ func TestGetPaginatedResults_BestEffort_RequestCount(t *testing.T) {
 		// Should have made exactly 3 HTTP calls: 2 successful + 1 failed that triggered the break
 		assert.Equal(t, int32(3), mock.calls.Load(),
 			fmt.Sprintf("expected 3 HTTP requests (2 success + 1 fail), got %d", mock.calls.Load()))
+	})
+}
+
+func TestGetPaginatedResults_HasNextPath(t *testing.T) {
+	pCtx := &backend.PluginContext{}
+	baseQuery := models.Query{
+		RefID:                  "A",
+		Type:                   models.QueryTypeJSON,
+		Source:                 "url",
+		Parser:                 models.InfinityParserBackend,
+		URL:                    "http://localhost/api/items",
+		URLOptions:             models.URLOptions{Method: http.MethodGet},
+		PageMode:               models.PaginationModePage,
+		PageMaxPages:           5,
+		PageParamPageFieldName: "page",
+		PageParamPageFieldType: models.PaginationParamTypeQuery,
+		PageParamPageFieldVal:  1,
+		PageParamSizeFieldName: "limit",
+		PageParamSizeFieldType: models.PaginationParamTypeQuery,
+		PageParamSizeFieldVal:  100,
+		Columns:                []models.InfinityColumn{},
+		ComputedColumns:        []models.InfinityColumn{},
+	}
+
+	t.Run("page mode stops when has-next value is null", func(t *testing.T) {
+		query := baseQuery
+		query.PageParamHasNextPath = "pagination.next"
+		// Page 1: next=2 (continue), Page 2: next=null (stop)
+		client := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{"next":null}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		// 2 pages fetched, each produces 1 row from root_selector="" (whole response is one object)
+		// With backend parser and no root_selector, each JSON response becomes a frame
+		assert.Equal(t, 2, frame.Rows())
+	})
+
+	t.Run("page mode fetches all pages when has-next is always present", func(t *testing.T) {
+		query := baseQuery
+		query.PageMaxPages = 3
+		query.PageParamHasNextPath = "pagination.next"
+		client := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{"next":3}}`,
+			`{"data":[{"id":3}],"pagination":{"next":4}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 3, frame.Rows())
+	})
+
+	t.Run("page mode without has-next path fetches all pages", func(t *testing.T) {
+		query := baseQuery
+		query.PageMaxPages = 3
+		// No PageParamHasNextPath set
+		client := newPaginationClient(t, 3, `[{"id":1}]`)
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 3, frame.Rows())
+	})
+
+	t.Run("page mode stops after first page when has-next is null on first response", func(t *testing.T) {
+		query := baseQuery
+		query.PageMaxPages = 5
+		query.PageParamHasNextPath = "pagination.next"
+		client := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":null}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 1, frame.Rows())
+	})
+
+	t.Run("offset mode stops when has-next value is absent", func(t *testing.T) {
+		query := baseQuery
+		query.PageMode = models.PaginationModeOffset
+		query.PageMaxPages = 5
+		query.PageParamHasNextPath = "pagination.next"
+		query.PageParamOffsetFieldName = "offset"
+		query.PageParamOffsetFieldType = models.PaginationParamTypeQuery
+		query.PageParamOffsetFieldVal = 0
+		client := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 2, frame.Rows())
+	})
+
+	t.Run("has-next path makes exactly the expected number of requests", func(t *testing.T) {
+		query := baseQuery
+		query.PageMaxPages = 5
+		query.PageParamHasNextPath = "pagination.next"
+		mock := &sequenceMocker{
+			bodies: []string{
+				`{"data":[{"id":1}],"pagination":{"next":2}}`,
+				`{"data":[{"id":2}],"pagination":{"next":null}}`,
+				`{"data":[{"id":3}],"pagination":{"next":4}}`,
+			},
+		}
+		client, err := NewClient(context.TODO(), models.InfinitySettings{})
+		require.NoError(t, err)
+		client.HttpClient.Transport = mock
+		client.IsMock = true
+
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, *client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		// Should have made exactly 2 HTTP calls: page 1 (next=2) + page 2 (next=null, stop)
+		assert.Equal(t, int32(2), mock.calls.Load())
+	})
+
+	t.Run("jq-backend: page mode stops when has-next value is null", func(t *testing.T) {
+		query := baseQuery
+		query.Parser = models.InfinityParserJQBackend
+		query.PageParamHasNextPath = ".pagination.next"
+		client := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{"next":null}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 2, frame.Rows())
+	})
+
+	t.Run("jq-backend: page mode fetches all pages when has-next is present", func(t *testing.T) {
+		query := baseQuery
+		query.Parser = models.InfinityParserJQBackend
+		query.PageMaxPages = 3
+		query.PageParamHasNextPath = ".pagination.next"
+		client := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{"next":3}}`,
+			`{"data":[{"id":3}],"pagination":{"next":4}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 3, frame.Rows())
+	})
+
+	t.Run("jq-backend: offset mode stops when has-next is absent", func(t *testing.T) {
+		query := baseQuery
+		query.Parser = models.InfinityParserJQBackend
+		query.PageMode = models.PaginationModeOffset
+		query.PageMaxPages = 5
+		query.PageParamHasNextPath = ".pagination.next"
+		query.PageParamOffsetFieldName = "offset"
+		query.PageParamOffsetFieldType = models.PaginationParamTypeQuery
+		query.PageParamOffsetFieldVal = 0
+		client := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 2, frame.Rows())
 	})
 }
 
