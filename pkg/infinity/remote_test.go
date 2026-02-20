@@ -464,14 +464,30 @@ func TestGetPaginatedResults_BestEffortWithHasNext(t *testing.T) {
 		assert.Equal(t, 1, frame.Rows())
 	})
 
-	t.Run("all pages succeed and all have next — max pages is the limit", func(t *testing.T) {
+	t.Run("max pages overrules has-next when API has more pages", func(t *testing.T) {
 		query := baseQuery
-		query.PageMaxPages = 3
-		client := newSequenceClient(t, []string{
-			`{"data":[{"id":1}],"pagination":{"next":2}}`,
-			`{"data":[{"id":2}],"pagination":{"next":3}}`,
-			`{"data":[{"id":3}],"pagination":{"next":4}}`,
-		})
+		query.PageMaxPages = 2
+		// All 5 pages indicate a next page exists, but max pages caps at 2
+		mock := &sequenceMocker{
+			bodies: []string{
+				`{"data":[{"id":1}],"pagination":{"next":2}}`,
+				`{"data":[{"id":2}],"pagination":{"next":3}}`,
+				`{"data":[{"id":3}],"pagination":{"next":4}}`,
+				`{"data":[{"id":4}],"pagination":{"next":5}}`,
+				`{"data":[{"id":5}],"pagination":{"next":6}}`,
+			},
+		}
+		client, err := NewClient(context.TODO(), models.InfinitySettings{})
+		require.NoError(t, err)
+		client.HttpClient.Transport = mock
+		client.IsMock = true
+
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, *client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 2, frame.Rows())
+		assert.Equal(t, int32(2), mock.calls.Load(),
+			fmt.Sprintf("expected exactly 2 requests, got %d", mock.calls.Load()))
 		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
 		require.NoError(t, err)
 		require.NotNil(t, frame)
