@@ -68,13 +68,14 @@ func (m *sequenceMocker) RoundTrip(_ *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-func newSequenceClient(t *testing.T, bodies []string) Client {
+func newSequenceClient(t *testing.T, bodies []string) (Client, *sequenceMocker) {
 	t.Helper()
+	mock := &sequenceMocker{bodies: bodies}
 	client, err := NewClient(context.TODO(), models.InfinitySettings{})
 	require.NoError(t, err)
-	client.HttpClient.Transport = &sequenceMocker{bodies: bodies}
+	client.HttpClient.Transport = mock
 	client.IsMock = true
-	return *client
+	return *client, mock
 }
 
 func TestGetPaginatedResults_BestEffort(t *testing.T) {
@@ -254,7 +255,7 @@ func TestGetPaginatedResults_HasNextPath(t *testing.T) {
 		query := baseQuery
 		query.PageParamHasNextPath = "pagination.next"
 		// Page 1: next=2 (continue), Page 2: next=null (stop)
-		client := newSequenceClient(t, []string{
+		client, _ := newSequenceClient(t, []string{
 			`{"data":[{"id":1}],"pagination":{"next":2}}`,
 			`{"data":[{"id":2}],"pagination":{"next":null}}`,
 		})
@@ -270,7 +271,7 @@ func TestGetPaginatedResults_HasNextPath(t *testing.T) {
 		query := baseQuery
 		query.PageMaxPages = 3
 		query.PageParamHasNextPath = "pagination.next"
-		client := newSequenceClient(t, []string{
+		client, _ := newSequenceClient(t, []string{
 			`{"data":[{"id":1}],"pagination":{"next":2}}`,
 			`{"data":[{"id":2}],"pagination":{"next":3}}`,
 			`{"data":[{"id":3}],"pagination":{"next":4}}`,
@@ -296,7 +297,7 @@ func TestGetPaginatedResults_HasNextPath(t *testing.T) {
 		query := baseQuery
 		query.PageMaxPages = 5
 		query.PageParamHasNextPath = "pagination.next"
-		client := newSequenceClient(t, []string{
+		client, _ := newSequenceClient(t, []string{
 			`{"data":[{"id":1}],"pagination":{"next":null}}`,
 		})
 		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
@@ -313,7 +314,7 @@ func TestGetPaginatedResults_HasNextPath(t *testing.T) {
 		query.PageParamOffsetFieldName = "offset"
 		query.PageParamOffsetFieldType = models.PaginationParamTypeQuery
 		query.PageParamOffsetFieldVal = 0
-		client := newSequenceClient(t, []string{
+		client, _ := newSequenceClient(t, []string{
 			`{"data":[{"id":1}],"pagination":{"next":2}}`,
 			`{"data":[{"id":2}],"pagination":{}}`,
 		})
@@ -327,19 +328,12 @@ func TestGetPaginatedResults_HasNextPath(t *testing.T) {
 		query := baseQuery
 		query.PageMaxPages = 5
 		query.PageParamHasNextPath = "pagination.next"
-		mock := &sequenceMocker{
-			bodies: []string{
-				`{"data":[{"id":1}],"pagination":{"next":2}}`,
-				`{"data":[{"id":2}],"pagination":{"next":null}}`,
-				`{"data":[{"id":3}],"pagination":{"next":4}}`,
-			},
-		}
-		client, err := NewClient(context.TODO(), models.InfinitySettings{})
-		require.NoError(t, err)
-		client.HttpClient.Transport = mock
-		client.IsMock = true
-
-		frame, err := GetPaginatedResults(context.Background(), pCtx, query, *client, map[string]string{})
+		client, mock := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{"next":null}}`,
+			`{"data":[{"id":3}],"pagination":{"next":4}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
 		require.NoError(t, err)
 		require.NotNil(t, frame)
 		// Should have made exactly 2 HTTP calls: page 1 (next=2) + page 2 (next=null, stop)
@@ -350,7 +344,7 @@ func TestGetPaginatedResults_HasNextPath(t *testing.T) {
 		query := baseQuery
 		query.Parser = models.InfinityParserJQBackend
 		query.PageParamHasNextPath = ".pagination.next"
-		client := newSequenceClient(t, []string{
+		client, _ := newSequenceClient(t, []string{
 			`{"data":[{"id":1}],"pagination":{"next":2}}`,
 			`{"data":[{"id":2}],"pagination":{"next":null}}`,
 		})
@@ -365,7 +359,7 @@ func TestGetPaginatedResults_HasNextPath(t *testing.T) {
 		query.Parser = models.InfinityParserJQBackend
 		query.PageMaxPages = 3
 		query.PageParamHasNextPath = ".pagination.next"
-		client := newSequenceClient(t, []string{
+		client, _ := newSequenceClient(t, []string{
 			`{"data":[{"id":1}],"pagination":{"next":2}}`,
 			`{"data":[{"id":2}],"pagination":{"next":3}}`,
 			`{"data":[{"id":3}],"pagination":{"next":4}}`,
@@ -385,7 +379,7 @@ func TestGetPaginatedResults_HasNextPath(t *testing.T) {
 		query.PageParamOffsetFieldName = "offset"
 		query.PageParamOffsetFieldType = models.PaginationParamTypeQuery
 		query.PageParamOffsetFieldVal = 0
-		client := newSequenceClient(t, []string{
+		client, _ := newSequenceClient(t, []string{
 			`{"data":[{"id":1}],"pagination":{"next":2}}`,
 			`{"data":[{"id":2}],"pagination":{}}`,
 		})
@@ -421,19 +415,12 @@ func TestGetPaginatedResults_BestEffortWithHasNext(t *testing.T) {
 
 	t.Run("has-next stops before best effort is needed", func(t *testing.T) {
 		query := baseQuery
-		mock := &sequenceMocker{
-			bodies: []string{
-				`{"data":[{"id":1}],"pagination":{"next":2}}`,
-				`{"data":[{"id":2}],"pagination":{"next":3}}`,
-				`{"data":[{"id":3}],"pagination":{"next":null}}`,
-			},
-		}
-		client, err := NewClient(context.TODO(), models.InfinitySettings{})
-		require.NoError(t, err)
-		client.HttpClient.Transport = mock
-		client.IsMock = true
-
-		frame, err := GetPaginatedResults(context.Background(), pCtx, query, *client, map[string]string{})
+		client, mock := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{"next":3}}`,
+			`{"data":[{"id":3}],"pagination":{"next":null}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
 		require.NoError(t, err)
 		require.NotNil(t, frame)
 		assert.Equal(t, 3, frame.Rows())
@@ -468,35 +455,24 @@ func TestGetPaginatedResults_BestEffortWithHasNext(t *testing.T) {
 		query := baseQuery
 		query.PageMaxPages = 2
 		// All 5 pages indicate a next page exists, but max pages caps at 2
-		mock := &sequenceMocker{
-			bodies: []string{
-				`{"data":[{"id":1}],"pagination":{"next":2}}`,
-				`{"data":[{"id":2}],"pagination":{"next":3}}`,
-				`{"data":[{"id":3}],"pagination":{"next":4}}`,
-				`{"data":[{"id":4}],"pagination":{"next":5}}`,
-				`{"data":[{"id":5}],"pagination":{"next":6}}`,
-			},
-		}
-		client, err := NewClient(context.TODO(), models.InfinitySettings{})
-		require.NoError(t, err)
-		client.HttpClient.Transport = mock
-		client.IsMock = true
-
-		frame, err := GetPaginatedResults(context.Background(), pCtx, query, *client, map[string]string{})
+		client, mock := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{"next":3}}`,
+			`{"data":[{"id":3}],"pagination":{"next":4}}`,
+			`{"data":[{"id":4}],"pagination":{"next":5}}`,
+			`{"data":[{"id":5}],"pagination":{"next":6}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
 		require.NoError(t, err)
 		require.NotNil(t, frame)
 		assert.Equal(t, 2, frame.Rows())
 		assert.Equal(t, int32(2), mock.calls.Load(),
 			fmt.Sprintf("expected exactly 2 requests, got %d", mock.calls.Load()))
-		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
-		require.NoError(t, err)
-		require.NotNil(t, frame)
-		assert.Equal(t, 3, frame.Rows())
 	})
 
 	t.Run("first page has no next — single page returned", func(t *testing.T) {
 		query := baseQuery
-		client := newSequenceClient(t, []string{
+		client, _ := newSequenceClient(t, []string{
 			`{"data":[{"id":1}],"pagination":{"next":null}}`,
 		})
 		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
@@ -508,18 +484,11 @@ func TestGetPaginatedResults_BestEffortWithHasNext(t *testing.T) {
 	t.Run("without best effort, has-next still stops pagination cleanly", func(t *testing.T) {
 		query := baseQuery
 		query.PageBestEffort = false
-		mock := &sequenceMocker{
-			bodies: []string{
-				`{"data":[{"id":1}],"pagination":{"next":2}}`,
-				`{"data":[{"id":2}],"pagination":{"next":null}}`,
-			},
-		}
-		client, err := NewClient(context.TODO(), models.InfinitySettings{})
-		require.NoError(t, err)
-		client.HttpClient.Transport = mock
-		client.IsMock = true
-
-		frame, err := GetPaginatedResults(context.Background(), pCtx, query, *client, map[string]string{})
+		client, mock := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{"next":null}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
 		require.NoError(t, err)
 		require.NotNil(t, frame)
 		assert.Equal(t, 2, frame.Rows())
