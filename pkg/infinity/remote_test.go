@@ -396,6 +396,121 @@ func TestGetPaginatedResults_HasNextPath(t *testing.T) {
 	})
 }
 
+func TestGetPaginatedResults_BestEffortWithHasNext(t *testing.T) {
+	pCtx := &backend.PluginContext{}
+	baseQuery := models.Query{
+		RefID:                  "A",
+		Type:                   models.QueryTypeJSON,
+		Source:                 "url",
+		Parser:                 models.InfinityParserBackend,
+		URL:                    "http://localhost/api/items",
+		URLOptions:             models.URLOptions{Method: http.MethodGet},
+		PageMode:               models.PaginationModePage,
+		PageMaxPages:           5,
+		PageBestEffort:         true,
+		PageParamHasNextPath:   "pagination.next",
+		PageParamPageFieldName: "page",
+		PageParamPageFieldType: models.PaginationParamTypeQuery,
+		PageParamPageFieldVal:  1,
+		PageParamSizeFieldName: "limit",
+		PageParamSizeFieldType: models.PaginationParamTypeQuery,
+		PageParamSizeFieldVal:  100,
+		Columns:                []models.InfinityColumn{},
+		ComputedColumns:        []models.InfinityColumn{},
+	}
+
+	t.Run("has-next stops before best effort is needed", func(t *testing.T) {
+		query := baseQuery
+		mock := &sequenceMocker{
+			bodies: []string{
+				`{"data":[{"id":1}],"pagination":{"next":2}}`,
+				`{"data":[{"id":2}],"pagination":{"next":3}}`,
+				`{"data":[{"id":3}],"pagination":{"next":null}}`,
+			},
+		}
+		client, err := NewClient(context.TODO(), models.InfinitySettings{})
+		require.NoError(t, err)
+		client.HttpClient.Transport = mock
+		client.IsMock = true
+
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, *client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 3, frame.Rows())
+		assert.Equal(t, int32(3), mock.calls.Load(),
+			fmt.Sprintf("expected exactly 3 requests, got %d", mock.calls.Load()))
+	})
+
+	t.Run("best effort catches error when has-next path is misconfigured", func(t *testing.T) {
+		query := baseQuery
+		// has-next path points to a field that doesn't exist in ANY response,
+		// so hasNextPage returns false on the first page — only 1 page fetched
+		query.PageParamHasNextPath = "nonexistent.field"
+		client := newPaginationClient(t, 5, `{"data":[{"id":1}]}`)
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 1, frame.Rows())
+	})
+
+	t.Run("best effort activates when has-next is absent and server also errors", func(t *testing.T) {
+		// Page 1 succeeds with next=2, page 2 fails with HTTP 400.
+		// Best effort catches the error, has-next never evaluated on the failed page.
+		query := baseQuery
+		client := newPaginationClient(t, 1, `{"data":[{"id":1}],"pagination":{"next":2}}`)
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 1, frame.Rows())
+	})
+
+	t.Run("all pages succeed and all have next — max pages is the limit", func(t *testing.T) {
+		query := baseQuery
+		query.PageMaxPages = 3
+		client := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":2}}`,
+			`{"data":[{"id":2}],"pagination":{"next":3}}`,
+			`{"data":[{"id":3}],"pagination":{"next":4}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 3, frame.Rows())
+	})
+
+	t.Run("first page has no next — single page returned", func(t *testing.T) {
+		query := baseQuery
+		client := newSequenceClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"next":null}}`,
+		})
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 1, frame.Rows())
+	})
+
+	t.Run("without best effort, has-next still stops pagination cleanly", func(t *testing.T) {
+		query := baseQuery
+		query.PageBestEffort = false
+		mock := &sequenceMocker{
+			bodies: []string{
+				`{"data":[{"id":1}],"pagination":{"next":2}}`,
+				`{"data":[{"id":2}],"pagination":{"next":null}}`,
+			},
+		}
+		client, err := NewClient(context.TODO(), models.InfinitySettings{})
+		require.NoError(t, err)
+		client.HttpClient.Transport = mock
+		client.IsMock = true
+
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, *client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 2, frame.Rows())
+		assert.Equal(t, int32(2), mock.calls.Load())
+	})
+}
+
 func TestApplyPaginationItemToQuery(t *testing.T) {
 	t.Run(string(models.PaginationParamTypeQuery), func(t *testing.T) {
 		tests := []struct {
