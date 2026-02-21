@@ -313,6 +313,51 @@ func TestGetPaginatedResults_HasNextPath(t *testing.T) {
 		assert.Equal(t, int32(2), mock.calls.Load())
 	})
 
+	t.Run("boolean has_next: stops when false", func(t *testing.T) {
+		query := baseQuery
+		query.PageParamHasNextPath = "pagination.has_next"
+		client, mock := newMockClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"has_next":true}}`,
+			`{"data":[{"id":2}],"pagination":{"has_next":true}}`,
+			`{"data":[{"id":3}],"pagination":{"has_next":false}}`,
+		}, -1)
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 3, frame.Rows())
+		assert.Equal(t, int32(3), mock.calls.Load())
+	})
+
+	t.Run("boolean has_next: continues when true", func(t *testing.T) {
+		query := baseQuery
+		query.PageMaxPages = 3
+		query.PageParamHasNextPath = "pagination.has_next"
+		client, _ := newMockClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"has_next":true}}`,
+			`{"data":[{"id":2}],"pagination":{"has_next":true}}`,
+			`{"data":[{"id":3}],"pagination":{"has_next":true}}`,
+		}, -1)
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 3, frame.Rows())
+	})
+
+	t.Run("jq-backend: boolean has_next stops when false", func(t *testing.T) {
+		query := baseQuery
+		query.Parser = models.InfinityParserJQBackend
+		query.PageParamHasNextPath = ".pagination.has_next"
+		client, mock := newMockClient(t, []string{
+			`{"data":[{"id":1}],"pagination":{"has_next":true}}`,
+			`{"data":[{"id":2}],"pagination":{"has_next":false}}`,
+		}, -1)
+		frame, err := GetPaginatedResults(context.Background(), pCtx, query, client, map[string]string{})
+		require.NoError(t, err)
+		require.NotNil(t, frame)
+		assert.Equal(t, 2, frame.Rows())
+		assert.Equal(t, int32(2), mock.calls.Load())
+	})
+
 	t.Run("jq-backend: page mode stops when has-next value is null", func(t *testing.T) {
 		query := baseQuery
 		query.Parser = models.InfinityParserJQBackend

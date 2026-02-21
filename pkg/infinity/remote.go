@@ -163,12 +163,12 @@ func hasNextPage(frame *data.Frame, query models.Query) bool {
 		return false
 	}
 	framerType := jsonframer.FramerTypeGJSON
-	// GJSON returns "" for absent paths and "null" for null values.
-	// JQ returns "[]" for absent paths and "[null]" for null values.
-	emptyIndicators := map[string]bool{"": true, "null": true}
+	// GJSON returns "" for absent paths, "null" for null, "false" for false.
+	// JQ returns "[]" for absent paths, "[null]" for null, "[false]" for false.
+	emptyIndicators := map[string]bool{"": true, "null": true, "false": true}
 	if query.Parser == models.InfinityParserJQBackend {
 		framerType = jsonframer.FramerTypeJQ
-		emptyIndicators = map[string]bool{"[]": true, "[null]": true}
+		emptyIndicators = map[string]bool{"[]": true, "[null]": true, "[false]": true}
 	}
 	val, err := jsonframer.GetRootData(string(body), query.PageParamHasNextPath, framerType)
 	if err != nil {
