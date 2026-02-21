@@ -120,6 +120,7 @@ export type PaginationOffset = {
   pagination_param_offset_field_name?: string;
   pagination_param_offset_field_type?: PaginationParamType;
   pagination_param_offset_value?: number;
+  pagination_param_has_next_path?: string;
 } & PaginationBase<'offset'>;
 export type PaginationPage = {
   pagination_param_size_field_name?: string;
@@ -128,6 +129,7 @@ export type PaginationPage = {
   pagination_param_page_field_name?: string;
   pagination_param_page_field_type?: PaginationParamType;
   pagination_param_page_value?: number;
+  pagination_param_has_next_path?: string;
 } & PaginationBase<'page'>;
 export type PaginationCursor = {
   pagination_param_size_field_name?: string;
